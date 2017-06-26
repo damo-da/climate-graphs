@@ -1,5 +1,8 @@
+#!/usr/bin/env python3
+
 import csv, json
 import statistics as st
+import datetime
 import matplotlib.pyplot as plt
 from itertools import groupby
 import numpy as np
@@ -8,8 +11,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from copy import deepcopy
 import re
 from collections import OrderedDict
+from os import path
 
-FILE = '2'
 
 rows = [] # hourly
 daily = []
@@ -60,7 +63,7 @@ def min2str(minute):
 def convert():
     print("Converting CSV to JSON")
     global rows, FILE
-    with open(FILE+'.csv') as csvfile:
+    with open(path.join('data',FILE+'.csv')) as csvfile:
         reader = csv.DictReader(csvfile)
         rows = [dict(x) for x in list(reader)]
         print('{} rows found.'.format(len(rows)))
@@ -68,13 +71,13 @@ def convert():
         rows.sort(key=lambda x: parse_date_time(x['DATE']))
 
         print('Writing hourly data')
-        with open(FILE+'.json', 'w') as outfile:
+        with open(path.join('data',FILE+'.json'), 'w') as outfile:
             _rows = [{k:val for k,val in x.items() if not k.startswith('Monthly') and not k.startswith('DAILY')} for x in rows]
             json.dump(_rows, outfile)
 
         print('Writing daily data')
         # daily
-        with open(FILE+'.daily.json', 'w') as outfile:
+        with open(path.join(FILE+'.daily.json'), 'w') as outfile:
             _rows = [{k:val for k,val in x.items() if not k.startswith('HOURLY') and not k.startswith('Monthly')} for x in rows]
             _days = set([parse_date_time(x['DATE'])[:3] for x in _rows])
             print('{} days found'.format(len(_days)))
@@ -88,7 +91,7 @@ def convert():
 
         print('Writing monthly data')
         # monthly
-        with open(FILE+'.monthly.json', 'w') as outfile:
+        with open(path.join('data',FILE+'.monthly.json'), 'w') as outfile:
             _rows = [{k:val for k,val in x.items() if not k.startswith('HOURLY') and not k.startswith('DAILY')} for x in rows]
             _months = set([parse_date_time(x['DATE'])[:2] for x in _rows])
             print('{} months found'.format(len(_months)))
@@ -109,17 +112,17 @@ def read(load_hourly=True, load_daily=True, load_monthly=True):
     print("Reading JSON")
     global rows, daily, monthly, FILE
     if load_hourly:
-        with open(FILE+'.json') as f:
+        with open(path.join('data',FILE+'.json')) as f:
             rows = json.load(f)
             print('{} hourly rows read'.format(len(rows)))
 
     if load_daily:
-        with open(FILE+'.daily.json') as f:
+        with open(path.join('data',FILE+'.daily.json')) as f:
             daily = json.load(f)
             print('{} daily rows read'.format(len(daily)))
 
     if load_monthly:
-        with open(FILE+'.monthly.json') as f:
+        with open(path.join(FILE+'.monthly.json')) as f:
             monthly = json.load(f)
             print('{} monthly rows read'.format(len(monthly)))
 
@@ -203,8 +206,6 @@ def wind_dir_vs_hour():
     ax.set_ylabel("X")
     ax.set_zlabel("Hour")
 
-    plt.show()
-
 def wind_magnitude_vs_hour(key='HOURLYWindSpeed'):
     print('Using key {}'.format(key))
     global rows
@@ -245,32 +246,263 @@ def wind_magnitude_vs_hour(key='HOURLYWindSpeed'):
     plt.show()
     #draw_2d(dataset)
 
-def wind_magnitude_vs_hour_per_year():
+def wind_magnitude_vs_year_vs_hour(key='HOURLYWindSpeed', show=True):
+    """Show change of wind magnitude vs hour of day in years."""
+    print('Using key {}'.format(key))
+    global rows
+    hours = [{} for hour in range(24)]
+
+    num_rows = 0
+    # filter non-empty values
+    for x in rows:
+        date = parse_date_time(x['DATE'])
+        data = x[key].strip()
+
+        if data is '': continue
+        if date[0] not in hours[date[3]]:
+            hours[date[3]][date[0]] = []
+        hours[date[3]][date[0]].append(mk_int(data))
+
+        num_rows += 1
+
+    if num_rows == 0:
+        print('dataset empty')
+        return
+
+    print('Rendering {} rows'.format(num_rows))
+
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    for hour, years in enumerate(hours):
+        points = []
+        for year, values in years.items():
+            #plt.scatter(list(range(len(values))), values)
+
+            mean = st.mean(values)
+            sd = st.variance(values)**.5
+
+            #print("hour={0}, mean={1:.4f}, s.d.={2:.4f}".format(hour, mean, sd))
+            points.append((hour, year, mean))
+
+        x,y,z = list(zip(*points))
+        ax.plot(x,y,z, label="{}".format(hour))
+
+    ax.legend()
+    ax.set_title('Key: {}'.format(key))
+    if show:
+        plt.show()
+
+    #plt.title('Mean {} per hour of day. (Error bars equal 1 s.d.)'.format(key))
+    #plt.show()
+    #draw_2d(dataset)
+
+def wind_magnitude_vs_day_of_year_per_hour(data):
+    """Show the graphs of wind_magnitude vs day_of_year for significant hours."""
+
+    key = data['key']
+
+    print('Using key {}'.format(key))
+    global rows
+    hours = [{} for hour in range(24)]
+
+    num_rows = 0
+    # filter non-empty values
+    for x in rows:
+        date = parse_date_time(x['DATE'])
+        day_of_year = datetime.datetime(*date).timetuple().tm_yday
+        val = x[key].strip()
+
+        if val is '': continue
+        if day_of_year not in hours[date[3]]:
+            hours[date[3]][day_of_year] = []
+
+        hours[date[3]][day_of_year].append(mk_int(val))
+        num_rows += 1
+
+    if num_rows == 0:
+        print('dataset empty')
+        return
+    print('Rendering {} rows'.format(num_rows))
+
+    SHS = [0, 6, 10, 12, 13, 14, 16, 20, 23]
+    #SHS = [0]
+
+    for hour, day_of_years in enumerate(hours):
+        if hour not in SHS: continue;
+
+        fig = plt.figure()
+        ax = fig.gca()
+
+        points = []
+        for day_of_year, values in day_of_years.items():
+            #plt.scatter(list(range(len(values))), values)
+
+            mean = st.mean(values)
+            #sd = st.variance(values)**.5
+
+            #print("hour={0}, mean={1:.4f}, s.d.={2:.4f}".format(hour, mean, sd))
+            points.append((day_of_year, hour, mean))
+        points.sort(key = lambda x: x[0])
+
+        x,y,z = list(zip(*points))
+        ax.plot(x, z)
+
+        ax.legend()
+        ax.set_title('{} at hour {} for day of year(1-366)'.format(data['name'], hour))
+        ax.set_xlabel('hour of day')
+        ax.set_ylabel('{} ({})'.format(data['name'], data['unit']))
+
+    #plt.title('Mean {} per hour of day. (Error bars equal 1 s.d.)'.format(key))
+    #plt.show()
+    #draw_2d(dataset)
+
+def wind_magnitude_vs_hour_vs_year(key='HOURLYWindSpeed', show=True):
+    print('Using key {}'.format(key))
     global rows
     hours = [(hour, []) for hour in range(24)]
-    years = set([parse_date_time(x['DATE'])[0] for x in rows])
-    years = [(year, deepcopy(hours)) for year in years]
+    years = {}
 
-    # calculate dict of every day of year
-    data = OrderedDict();
+    num_rows = 0
+    # filter non-empty values
     for x in rows:
-        day = x['DATE']
-        day = parse_date_time(day)
-        day = str(day[0]).zfill(4) +"-"+ str(day[1]).zfill(2) +"-"+ str(day[2]).zfill(2) + " "
-        if day not in data:
-            data[day] = []
-        data[day].append(mk_int(x['HOURLYWindSpeed']))
+        date = parse_date_time(x['DATE'])
+        data = x[key].strip()
 
-    dataset = []
-    for _date, rows in data.items():
-        date_time = parse_date_time(_date)
-        print(date_time)
-        year, day_of_year = date_time[0], (date_time[1]-1) * 30 + date_time[2]
-        wind_speed = st.mean(rows)
-        dataset.append((day_of_year, wind_speed, year))
+        if data is '': continue
+        if date[0] not in years:
+            years[date[0]] = deepcopy(hours)
 
-    draw_3d(dataset)
+        years[date[0]][date[3]][1].append(mk_int(data))
+        num_rows += 1
 
+    if num_rows == 0:
+        print('dataset empty')
+        return
+    print('Rendering {} rows'.format(num_rows))
+
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    for year, hours in years.items():
+        points = []
+        for hour, values in hours:
+            #plt.scatter(list(range(len(values))), values)
+
+            mean = st.mean(values)
+            sd = st.variance(values)**.5
+
+            #print("hour={0}, mean={1:.4f}, s.d.={2:.4f}".format(hour, mean, sd))
+            points.append((year, hour, mean))
+
+        x,y,z = list(zip(*points))
+        ax.plot(x,y,z, label="{}".format(hour))
+
+    ax.legend()
+    ax.set_title('Key: {}'.format(key))
+    if show:
+        plt.show()
+
+    #plt.title('Mean {} per hour of day. (Error bars equal 1 s.d.)'.format(key))
+    #plt.show()
+    #draw_2d(dataset)
+
+
+def wind_magnitude_vs_hour_vs_year(key='HOURLYWindSpeed', show=True):
+    print('Using key {}'.format(key))
+    global rows
+    hours = [(hour, []) for hour in range(24)]
+    years = {}
+
+    num_rows = 0
+    # filter non-empty values
+    for x in rows:
+        date = parse_date_time(x['DATE'])
+        data = x[key].strip()
+
+        if data is '': continue
+        if date[0] not in years:
+            years[date[0]] = deepcopy(hours)
+
+        years[date[0]][date[3]][1].append(mk_int(data))
+        num_rows += 1
+
+    if num_rows == 0:
+        print('dataset empty')
+        return
+    print('Rendering {} rows'.format(num_rows))
+
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    for year, hours in years.items():
+        points = []
+        for hour, values in hours:
+            #plt.scatter(list(range(len(values))), values)
+
+            mean = st.mean(values)
+            sd = st.variance(values)**.5
+
+            #print("hour={0}, mean={1:.4f}, s.d.={2:.4f}".format(hour, mean, sd))
+            points.append((year, hour, mean))
+
+        x,y,z = list(zip(*points))
+        ax.plot(x,y,z, label="{}".format(hour))
+
+    ax.legend()
+    ax.set_title('Key: {}'.format(key))
+    if show:
+        plt.show()
+
+    #plt.title('Mean {} per hour of day. (Error bars equal 1 s.d.)'.format(key))
+    #plt.show()
+    #draw_2d(dataset)
+
+def wind_magnitude_vs_hour_vs_year(key='HOURLYWindSpeed', show=True):
+    print('Using key {}'.format(key))
+    global rows
+    hours = [(hour, []) for hour in range(24)]
+    years = {}
+
+    num_rows = 0
+    # filter non-empty values
+    for x in rows:
+        date = parse_date_time(x['DATE'])
+        data = x[key].strip()
+
+        if data is '': continue
+        if date[0] not in years:
+            years[date[0]] = deepcopy(hours)
+
+        years[date[0]][date[3]][1].append(mk_int(data))
+        num_rows += 1
+
+    if num_rows == 0:
+        print('dataset empty')
+        return
+    print('Rendering {} rows'.format(num_rows))
+
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    for year, hours in years.items():
+        points = []
+        for hour, values in hours:
+            #plt.scatter(list(range(len(values))), values)
+
+            mean = st.mean(values)
+            sd = st.variance(values)**.5
+
+            #print("hour={0}, mean={1:.4f}, s.d.={2:.4f}".format(hour, mean, sd))
+            points.append((year, hour, mean))
+
+        x,y,z = list(zip(*points))
+        ax.plot(x,y,z, label="{}".format(hour))
+
+    ax.legend()
+    ax.set_title('Key: {}'.format(key))
+    if show:
+        plt.show()
+
+    #plt.title('Mean {} per hour of day. (Error bars equal 1 s.d.)'.format(key))
+    #plt.show()
+    #draw_2d(dataset)
 
 def draw_3d(dataset, xlabel='x',ylabel='y',zlabel='z'):
     fig = plt.figure()
@@ -293,15 +525,26 @@ def sunrise_by_day():
 
     draw_2d(_items)
 
-data = ['HOURLYVISIBILITY', 'HOURLYRelativeHumidity', 'HOURLYWindSpeed', 'HOURLYWindDirection', 'HOURLYWindGustSpeed', 'HOURLYStationPressure', 'HOURLYPressureTendency', 'HOURLYPressureChange', 'HOURLYSeaLevelPressure', 'HOURLYPrecip', 'HOURLYAltimeterSetting']
+data = [{'key': 'HOURLYVISIBILITY', 'name': 'visibility', 'unit': 'miles'},
+        {'key': 'HOURLYRelativeHumidity', 'name': 'Relative Humidity', 'unit': '%'},
+        {'key': 'HOURLYWindSpeed', 'name': 'Wind Speed', 'unit': 'mph'},
+        {'key': 'HOURLYWindDirection', 'name': 'Wind Direction', 'unit': '°'},
+        {'key': 'HOURLYWindGustSpeed', 'name': 'Wind gust speed', 'unit': 'mph'},
+        {'key': 'HOURLYStationPressure', 'name': 'Pressure', 'unit': 'inHg'},
+        {'key': 'HOURLYPrecip', 'name': 'Hourly Precipitation', 'unit': 'inch to 100th'},
+        {'key': 'HOURLYAltimeterSetting', 'name': 'Altimeter setting', 'unit': 'inHg'}]
 
 
+FILE = '5'
 def analyze():
     #sunrise_on_years()
     #wind_dir_vs_date()
     #wind_dir_vs_hour()
-    wind_magnitude_vs_hour(data[9])
-    #wind_magnitude_vs_hour_per_year()
+    #wind_magnitude_vs_hour(data[9])
+    #[wind_magnitude_vs_hour_vs_year(x, show=False) for x in data]
+    #[wind_magnitude_vs_year_vs_hour(data[x], show=False) for x in range(len(data))]
+    wind_magnitude_vs_day_of_year_per_hour(data[2])
+    plt.show()
     #sunrise_by_day()
 
 if __name__ == '__main__':
